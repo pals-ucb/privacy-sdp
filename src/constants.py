@@ -1,0 +1,15 @@
+'''
+    Common constants used in different modules
+'''
+
+BATCH_SIZE = 8
+NUM_EPOCHS = 1
+SEQUENCE_LENGTH = 128
+SHUFFLE_SIZE = 128
+# DP Parameters
+LEARNING_RATE = 5e-5
+NOISE_MULTIPLIER = 0.4
+MAX_GRADIENT_NORM = 0.1
+PRIVACY_EPSILON = 7.5
+PRIVACY_DELTA = 1e-5
+

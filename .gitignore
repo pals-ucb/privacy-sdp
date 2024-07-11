@@ -3,4 +3,6 @@
 .DS_Store
 .ipynb_checkpoints/*
 .ipynb_checkpoints
+__pycache__
+__pycache__/*
 notebooks/gpt2_finetuned_pt_v1/
