@@ -4,39 +4,78 @@
     pretrained model for baseline operations.
 '''
 import os
+import sys
 import time
+import constants as CONST
 import torch
 #from transformers import GPT2Tokenizer, GPT2LMHeadModel, AdamW
 #from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 #import s3fs
+# Imports for DP
+from opacus import PrivacyEngine
+from opacus.utils.batch_memory_manager import BatchMemoryManager
 
 class llm_base_ops:
-    def __init__(self, llm, llm_tokenizer, optimizer, device_type, rank=0, world_size=1):
+    def __init__(self, args, llm, llm_tokenizer, optimizer, device_type, train_dataloader, 
+                 validate_dataloader, rank, world_size):
+        self.args = args
         self.llm = llm
         self.llm_tokenizer = llm_tokenizer
         self.optimizer = optimizer
         self.device_type = device_type
+        self.train_dataloader = train_dataloader
+        self.validate_dataloader = validate_dataloader
         self.rank = rank
         self.world_size = world_size
         if world_size == 1:
             self.device = torch.device(device_type)
         else:
             self.device = torch.device(f'{device_type}:{rank}')
-        print(f'Device set to {self.device}')
+
+        if args.optimizer == 2:
+            print(f'llm_ops: Emabling differential privacy')
+            self.enable_differential_privacy()
+
+        if world_size > 2:
+            print(f'llm_ops: Enabling DDP')
+            self.enable_DDP()
+
+        #self.enable_device()
+        return
+    
+    def enable_differential_privacy(self):
+        self.llm.train() # put the model in training mode
+        self.privacy_engine = PrivacyEngine()
+        self.llm, self.optimizer, self.train_dataloader = self.privacy_engine.make_private_with_epsilon(
+            module=self.llm,
+            optimizer=self.optimizer,
+            data_loader=self.train_dataloader,
+            target_epsilon=CONST.PRIVACY_EPSILON,
+            target_delta=CONST.PRIVACY_DELTA,
+            epochs=self.args.epochs, 
+            max_grad_norm=CONST.MAX_GRADIENT_NORM,
+            batch_first = False
+        )
+        return
+
+    def enable_device(self):
+        print(f'llm_ops: pushing llm to device {self.device}')
         # Send the model to device
         self.llm = self.llm.to(self.device)
+        return
 
+    def enable_DDP(self):
         if self.world_size > 1:
             # Wrap the llm with DDP
             self.llm = DDP(sel.llm, device_ids=[self.rank])
         return
 
-    # Training function
-    def train(self, dataloader):
+    # Training function common
+    def __train(self, dataloader, description):
         self.llm.train()
         total_loss = 0
-        for inputs, attention_mask in tqdm(dataloader, desc="Training model"):
+        for inputs, attention_mask in tqdm(dataloader, desc=description):
             self.optimizer.zero_grad()
             inputs = inputs.to(self.device)
             attention_mask = attention_mask.to(self.device)
@@ -45,8 +84,25 @@ class llm_base_ops:
             loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
-        return total_loss / len(dataloader)
+        return total_loss
+        
+    # Training function
+    def train(self, dataloader):
+        loss = self.__train(dataloader, "Training model")
+        return loss/len(dataloader)
 
+    def train_dp(self, dataloader):
+        '''
+        with BatchMemoryManager(data_loader=dataloader, 
+                                max_physical_batch_size=self.args.batch_size, 
+                                optimizer=self.optimizer) as memory_safe_data_loader:
+            total_loss = self.__train(memory_safe_data_loader, "Training model with DP")
+        '''
+        loss = self.__train(dataloader, "Training model with DP")
+        epsilon, best_alpha = self.privacy_engine.get_privacy_spent()
+        print(f"Privacy spent (ε): {epsilon:.2f}")
+        return loss / len(dataloader)
+    
     def evaluate(self, dataloader):
         self.llm.eval()
         total_loss = 0
@@ -60,15 +116,25 @@ class llm_base_ops:
         return total_loss / len(dataloader)
 
     # Training loop
-    def train_loop(self, epochs, train_dataloader, valid_dataloader):
-        print(f"Using device: {self.device}")
-        self.llm = self.llm.to(self.device)
+    def train_loop(self):
+        self.enable_device()
+        epochs = self.args.epochs
         st = time.time()
         for epoch in range(1, epochs+1):
-            train_loss = self.train(train_dataloader)
-            valid_loss = self.evaluate(valid_dataloader)
+            if self.world_size > 1:
+                print(self.train_dataloader.sampler)
+                self.train_dataloader.sampler.set_epoch(epoch)
+            if self.args.optimizer == 1:
+                train_loss = self.train(self.train_dataloader)
+            elif self.args.optimizer == 2:
+                train_loss = self.train_dp(self.train_dataloader)
+            else:
+                print(f'llm_ops: invalid type of optimizer.')
+                sys.exit(-1)
+            valid_loss = self.evaluate(self.valid_dataloader)
             print(f"Epoch {epoch}, Train Loss: {train_loss}, Validation Loss: {valid_loss}")
         en = time.time()
+        print(f'llm_ops: training total time: {(en-st)/60} mins')
         return (st, en)
 
     def generate(self, input_text, max_length=256):

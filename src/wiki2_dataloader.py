@@ -40,8 +40,8 @@ class Wiki2TextDataset(Dataset):
     def __getitem__(self, i):
         return self.tokens[i], self.attention_masks[i]
     
-def load_dataset(file_path, tokenizer, rank, world_size, 
-                 shuffle=False, max_length=CONST.SEQUENCE_LENGTH, batch_size=CONST.BATCH_SIZE):
+def load_dataset(file_path, tokenizer, rank, world_size, batch_size,
+                 shuffle=False, max_length=CONST.SEQUENCE_LENGTH):
     '''
     Load_dataset function loads the wiki2 data from the input file and returns the 
     dataloader object 
@@ -60,11 +60,12 @@ def load_dataset(file_path, tokenizer, rank, world_size,
     else:
         return DataLoader(dataset, batch_size=batch_size, pin_memory=True, shuffle=shuffle)
 
-def get_wiki2_dataloaders(tokenizer, rank=0, world_size=1):
+def get_wiki2_dataloaders(args, tokenizer, rank=0, world_size=1):
     '''
     get_wiki2_dataloaders function loades the wiki2 train, test, valid and unittest 
     data sets.
     Parameters:
+        args (argparse.ArgumentParser): The command line argument parser object
         tokenizer (Transformers.Tokenizer*): The tokenizer object associated with the model
         rank (int): The rank provides the current GPU instance id and is 0 by default.
         world_size (int): World size provides the number of GPUs available for training. When > 1 
@@ -78,9 +79,9 @@ def get_wiki2_dataloaders(tokenizer, rank=0, world_size=1):
     valid_file = wikitext2_root + 'wiki.valid.tokens'
     unittest_file = wikitext2_root + 'unittest.tokens'
 
-    train_dataloader    = load_dataset(train_file, tokenizer, rank, world_size, shuffle=True)
-    test_dataloader     = load_dataset(test_file, tokenizer, rank, world_size)
-    valid_dataloader    = load_dataset(valid_file, tokenizer, rank, world_size)
-    unittest_dataloader = load_dataset(unittest_file, tokenizer, rank, world_size)
-    return (train_dataloader, train_dataloader, valid_dataloader, unittest_dataloader)
+    train_dataloader    = load_dataset(train_file, tokenizer, rank, world_size, args.batch_size, shuffle=True)
+    test_dataloader     = load_dataset(test_file, tokenizer, rank, world_size, args.batch_size)
+    valid_dataloader    = load_dataset(valid_file, tokenizer, rank, world_size, args.batch_size)
+    unittest_dataloader = load_dataset(unittest_file, tokenizer, rank, world_size, args.batch_size)
+    return (train_dataloader, test_dataloader, valid_dataloader, unittest_dataloader)
     
