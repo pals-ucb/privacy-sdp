@@ -14,8 +14,7 @@ def get_gpt2_model(model_name):
     gpt2_tokenizer = GPT2Tokenizer.from_pretrained(model_name)
     gpt2_tokenizer.pad_token = gpt2_tokenizer.eos_token
     gpt2_lm.resize_token_embeddings(len(gpt2_tokenizer)) 
-    gpt2_optimizer = torch.optim.AdamW(gpt2_lm.parameters(), lr=CONST.LEARNING_RATE)
-    return gpt2_lm, gpt2_tokenizer, gpt2_optimizer
+    return gpt2_lm, gpt2_tokenizer
 
 def prepare_model(rank, args, world_size, device_type):
     '''
@@ -36,12 +35,27 @@ def prepare_model(rank, args, world_size, device_type):
         print(f'Not setting up DDP and using either single GPU or CPU only.')
 
     model_name = 'gpt2'
-    llm, tokenizer, optimizer = get_gpt2_model(model_name)
+    llm, tokenizer = get_gpt2_model(model_name)
     train_dataloader, test_dataloader, validate_dataloader, _ = w2dl.get_wiki2_dataloaders(args, tokenizer, rank, world_size)
-    llm_ops = llm_base_ops(args, llm, tokenizer, optimizer, device_type, train_dataloader, validate_dataloader,  rank, world_size)
+    llm_ops = llm_base_ops(args, llm, tokenizer, device_type, train_dataloader, validate_dataloader,  rank, world_size)
     if rank == 0 and not args.skip:
         print(llm_ops.generate('Robert went on a trip to Las Vegas, and '))
-        
+    if args.optimizer == 2:
+        layers_to_freeze = ['transformer.h.0', 'transformer.h.1', 'transformer.h.2', 'transformer.h.3', 'transformer.h.4', 
+                            'transformer.h.5', 'transformer.h.6', 'transformer.h.7', 'transformer.h.8', 'transformer.h.9',
+                            'transformer.h.10', 'transformer.h.11',
+                            'transformer.ln_f'
+                            ]
+        r = llm_ops.freeze_layers(layers_to_freeze)
+        print(r)
+    
+        '''
+        l = []
+        llm_ops.get_grad_layers(l)
+        for e in l:
+            print(e)
+        '''
+    llm_ops.create_optimizer()
     llm_ops.train_loop()
 
     if rank == 0:

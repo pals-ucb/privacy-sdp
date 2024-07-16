@@ -17,12 +17,12 @@ from opacus import PrivacyEngine
 from opacus.utils.batch_memory_manager import BatchMemoryManager
 
 class llm_base_ops:
-    def __init__(self, args, llm, llm_tokenizer, optimizer, device_type, train_dataloader, 
+    def __init__(self, args, llm, llm_tokenizer, device_type, train_dataloader, 
                  validate_dataloader, rank, world_size):
         self.args = args
         self.llm = llm
         self.llm_tokenizer = llm_tokenizer
-        self.optimizer = optimizer
+        self.optimizer = None
         self.device_type = device_type
         self.train_dataloader = train_dataloader
         self.validate_dataloader = validate_dataloader
@@ -33,17 +33,18 @@ class llm_base_ops:
         else:
             self.device = torch.device(f'{device_type}:{rank}')
 
-        if args.optimizer == 2:
-            print(f'llm_ops: Emabling differential privacy')
-            self.enable_differential_privacy()
-
         if world_size > 2:
             print(f'llm_ops: Enabling DDP')
             self.enable_DDP()
 
         #self.enable_device()
         return
-    
+        
+    def create_optimizer(self):
+        self.optimizer = torch.optim.AdamW(self.llm.parameters(), lr=CONST.LEARNING_RATE, eps=CONST.EPSILON)
+        if self.args.optimizer == 2:
+            self.enable_differential_privacy()
+            
     def enable_differential_privacy(self):
         self.llm.train() # put the model in training mode
         self.privacy_engine = PrivacyEngine()
@@ -57,6 +58,7 @@ class llm_base_ops:
             max_grad_norm=CONST.MAX_GRADIENT_NORM,
             batch_first = False
         )
+        print(f'Enabled differential privacy')
         return
 
     def enable_device(self):
@@ -71,6 +73,44 @@ class llm_base_ops:
             self.llm = DDP(sel.llm, device_ids=[self.rank])
         return
 
+    def freeze_layers(self, layers):
+        '''
+        freeze_layers function freezes the given list of sublayers and their
+        child. This will causes these parameers not to be updated during training.
+        
+        Parameters:
+            layers (list) : List of submodules within the llm
+                           
+        '''
+        total_params  = 0
+        frozen_params = 0
+
+        for param in self.llm.parameters():
+            param.requires_grad = True
+            total_params += param.numel()
+
+        for layer in layers:
+            sm = self.llm.get_submodule(layer)
+            for _, child in sm.named_modules():
+                for _, param in child.named_parameters():
+                    if param.requires_grad:
+                        param.requires_grad = False
+                        frozen_params += param.numel()
+        return total_params, frozen_params, total_params - frozen_params
+
+    def get_grad_layers(self, ret_list, child=None, prefix=''):
+        """
+        Recursively prints the requires_grad flag for each layer in the model.
+        """
+        module = child if child else self.llm
+        for name, child in module.named_children():
+            full_name = f"{prefix}.{name}" if prefix else name
+            # Check if the module has parameters
+            if list(child.parameters()):
+                for param_name, param in child.named_parameters(recurse=False):
+                    ret_list.append(f"Layer: {full_name}.{param_name} - requires_grad: {param.requires_grad}")
+            # Recursively check the child module
+            self.get_grad_layers(ret_list, child, full_name)
     # Training function common
     def __train(self, dataloader, description):
         self.llm.train()
@@ -98,7 +138,9 @@ class llm_base_ops:
                                 optimizer=self.optimizer) as memory_safe_data_loader:
             total_loss = self.__train(memory_safe_data_loader, "Training model with DP")
         '''
-        loss = self.__train(dataloader, "Training model with DP")
+        with BatchMemoryManager(data_loader=dataloader, max_physical_batch_size=4, 
+                                optimizer=self.optimizer ) as memory_safe_data_loader:
+            loss = self.__train(memory_safe_data_loader, "Training model with DP")
         epsilon, best_alpha = self.privacy_engine.get_privacy_spent()
         print(f"Privacy spent (ε): {epsilon:.2f}")
         return loss / len(dataloader)
