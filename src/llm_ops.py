@@ -153,6 +153,7 @@ class llm_base_ops:
         return (st, en)
 
     def train_dp(self, dataloader):
+        st = time.time()
         for epoch in range(1, self.args.epochs+1):
             epoch_losses = []
             with BatchMemoryManager(
@@ -186,6 +187,9 @@ class llm_base_ops:
                           f"Eval accuracy: {eval_accuracy:.3f} | "
                           f"ɛ: {eps:.2f}"
                         )
+        en = time.time()
+        print(f'llm_ops: DP training total time: {(en-st)/60} mins')
+        return (st, en)
 
     def evaluate(self, dataloader):
         def accuracy(y, y_hat):
@@ -264,5 +268,15 @@ class llm_base_ops:
         gen_text = self.llm_tokenizer.decode(output[0], skip_special_tokens=True)
         return gen_text
         
-
-en = time.time()
+    def save_model(self):
+        if self.args.save_model:
+            if self.args.optimizer == 1:
+                self.llm.save_pretrained(self.args.path)
+                self.llm_tokenizer.save_pretrained(self.args.path)
+            elif self.args.optimizer == 2:
+                self.llm_original.save_pretrained(self.args.path)
+                self.llm_tokenizer.save_pretrained(self.args.path)
+            else:
+                print(f'Invalid optimizer: {self.args.optimizer}')
+                return
+            print(f'Saved model to: {self.args.path}')
